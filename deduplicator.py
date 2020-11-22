@@ -109,7 +109,8 @@ def remove_duplicates(root_dir, extensions=None, keepOldest=True, remove=False, 
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Given a directory find duplicates by a content', epilog=EPILOG)
+    parser = argparse.ArgumentParser(description='Given a directory find duplicate files using a hash sum (md5)',
+                                     epilog=EPILOG)
     parser.add_argument("--directory", "-d", help="Root directory to scan", required=False)
     parser.add_argument("--file-extensions", "-f", help="comma separated list of file extensions f.e. jpg,png",
                         required=False)
