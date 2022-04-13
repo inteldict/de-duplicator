@@ -3,23 +3,51 @@ import hashlib
 import os
 import sys
 
-BLOCK_SIZE = 4096 * 4096
-
-EPILOG = f'''Example usage: 
-// Find and print duplicated images [jpg,png] and empty directories
+INTRO = f'''Example usage:
+// The program can use hash function of your choice, see hashlib for details
+ 
+// Find and print duplicated images [jpg,png] and empty directories 
 $ python3 {sys.argv[0]} -d /tmp/test -f jpg,png -e -o -n
 
 // Remove duplicated images [jpg,png] and empty directories
 $ python3 {sys.argv[0]} -d /tmp/test -f jpg,png -e -o
 '''
 
+BLOCK_SIZE = 4096 * 4096
+# Setup hasher
+# HASH_FUNC = hashlib.md5
+HASH_FUNC = hashlib.sha1
 
-def md5(file_name):
-    hash_md5 = hashlib.md5()
-    with open(file_name, "rb") as f:
-        for chunk in iter(lambda: f.read(BLOCK_SIZE), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+
+def block_iter(file_to_read, block_size=BLOCK_SIZE):
+    with file_to_read:
+        block = file_to_read.read(block_size)
+        while len(block) > 0:
+            yield block
+            block = file_to_read.read(block_size)
+
+
+def hash_builder(batch_bytes, hasher):
+    for block in batch_bytes:
+        hasher.update(block)
+    return hasher
+
+
+def derive_hash_builder(hex_str=False):
+    def _hexdigest(bytes_batch, hasher):
+        return hash_builder(bytes_batch, hasher).hexdigest()
+
+    def _digest(bytes_batch, hasher):
+        return hash_builder(bytes_batch, hasher).digest()
+
+    return _hexdigest if hex_str else _digest
+
+
+def derive_hash_func(hash_factory, hash_func):
+    def _hash(file_name):
+        return hash_factory(block_iter(open(file_name, 'rb')), hash_func())
+
+    return _hash
 
 
 class File:
@@ -32,7 +60,7 @@ class File:
 
 
 def list_files(directory_name, extensions=None):
-    for root, subdirs, files in os.walk(directory_name):
+    for root, dirs, files in os.walk(directory_name, topdown=False):
         for filename in files:
             if extensions:
                 _, file_extension = os.path.splitext(filename)
@@ -41,14 +69,14 @@ def list_files(directory_name, extensions=None):
             else:
                 yield os.path.join(root, filename)
         # recursively iterate over subdirectories
-        # for subdir in subdirs:
+        # for dir in dirs:
         #     yield from list_files(os.path.join(root, subdir), extensions)
 
 
 def delete_empty_directories(directory_name, remove=False):
     counter = 0
-    for root, subdirs, _ in os.walk(directory_name):
-        for subdir in subdirs:
+    for root, dirs, _ in os.walk(directory_name, topdown=False):
+        for subdir in dirs:
             subdir_path = os.path.join(root, subdir)
             if os.path.isdir(subdir_path) and not os.listdir(subdir_path):  # directory is empty
                 counter += 1
@@ -77,12 +105,13 @@ def get_last_modification_time(filename):
 
 
 def remove_duplicates(root_dir, extensions=None, keepOldest=True, remove=False, remove_empty=False):
+    hash_func = derive_hash_func(derive_hash_builder(False), HASH_FUNC)
     hash_dict = {}
     counter = 0
     for file_name in list_files(root_dir, extensions):
-        md5_digest = md5(file_name)
-        if md5_digest in hash_dict:
-            prev_file = hash_dict[md5_digest]
+        digest = hash_func(file_name)
+        if digest in hash_dict:
+            prev_file = hash_dict[digest]
             mod_time = get_last_modification_time(file_name)
             counter += 1
             if keepOldest:
@@ -90,15 +119,15 @@ def remove_duplicates(root_dir, extensions=None, keepOldest=True, remove=False, 
                     delete_file(file_name, remove)
                 else:
                     delete_file(prev_file.path, remove)
-                    hash_dict[md5_digest] = File(file_name, mod_time)
+                    hash_dict[digest] = File(file_name, mod_time)
             else:
                 if prev_file.last_modified >= mod_time:
                     delete_file(file_name, remove)
                 else:
                     delete_file(prev_file.path, remove)
-                    hash_dict[md5_digest] = File(file_name, mod_time)
+                    hash_dict[digest] = File(file_name, mod_time)
         else:
-            hash_dict[md5_digest] = File(file_name, get_last_modification_time(file_name))
+            hash_dict[digest] = File(file_name, get_last_modification_time(file_name))
     if remove:
         print(f"Total duplicates removed: {counter}")
     else:
@@ -110,7 +139,7 @@ def remove_duplicates(root_dir, extensions=None, keepOldest=True, remove=False, 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='Given a directory find duplicate files using a hash sum (md5)',
-                                     epilog=EPILOG)
+                                     epilog=INTRO)
     parser.add_argument("--directory", "-d", help="Root directory to scan", required=False)
     parser.add_argument("--file-extensions", "-f", help="comma separated list of file extensions f.e. jpg,png",
                         required=False)
