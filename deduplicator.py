@@ -236,15 +236,16 @@ def build_extensions(raw_extensions: AnyStr) -> Set[AnyStr]:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Given a directory find duplicate files using a hash sum (md5)',
+    parser = argparse.ArgumentParser(description='Given a directory, find duplicate files and empty directories '
+                                                 'employing hash comparison (md5, sha1, sha256, etc.)',
                                      epilog=EPILOG)
     parser.add_argument("--directory", "-d",
                         help="Root directory to scan. If not specified, current directory will be used", required=False)
-    parser.add_argument("--file-extensions", "-f", help="comma separated list of file extensions f.e. jpg,png",
+    parser.add_argument("--file-extensions", "-f", help="Comma separated list of file extensions f.e. jpg,png",
                         required=False)
-    parser.add_argument("--path-blacklist", "-b", help="comma separated blacklist f.e. .number,.git",
+    parser.add_argument("--path-blacklist", "-b", help="Comma separated blacklist f.e. .number,.git",
                         required=False)
-    parser.add_argument("--oldest", "-o", help="keep oldest / newest files", required=False, default=True,
+    parser.add_argument("--oldest", "-o", help="Keep oldest / newest files", required=False, default=True,
                         action='store_true')
     parser.add_argument("--remove", "-r", help="Use this option to perform changes on the filesystem", required=False,
                         default=False, action='store_false')
