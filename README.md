@@ -5,7 +5,7 @@ Flexible tool for removing duplicate files by employing hash comparison (md5, sh
 
 ### Find and print duplicated images [jpg, png] and empty directories 
 ```
-$ python3 deduplicator.py -d /tmp/test -f jpg,png -e -o -n
+$ python3 deduplicator.py -d /tmp/test -f jpg,png -e -o
 ```
 
 ### Find and print duplicated images [jpg, png] and empty directories IGNORING directories from blacklist [.numbers, .git] 
