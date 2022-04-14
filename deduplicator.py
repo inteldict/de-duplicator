@@ -1,8 +1,12 @@
 import argparse
-import hashlib
 import os
 import sys
-from typing import AnyStr, Callable, Set
+from typing import AnyStr, Set
+
+from fileutils import directory_is_empty, get_last_modification_time, delete_file, extension_filter_builder, \
+    path_blacklist_builder, derive_filtered_file_iter, derive_filtered_empty_directory_iter, file_iter, \
+    empty_directory_iter
+from hash import derive_hash_func, derive_hash_builder, HASH_FUNC
 
 EPILOG = f'''Example usage:
 // The program can use hash function of your choice, see hashlib for details
@@ -14,42 +18,6 @@ $ python3 {sys.argv[0]} -d /tmp/test -f jpg,png -e -o -n
 $ python3 {sys.argv[0]} -d /tmp/test -f jpg,png -e -o
 '''
 
-BLOCK_SIZE = 4096 * 4096
-# Setup hasher
-# HASH_FUNC = hashlib.md5
-HASH_FUNC = hashlib.sha1
-
-
-def block_iter(file_to_read, block_size=BLOCK_SIZE):
-    with file_to_read:
-        block = file_to_read.read(block_size)
-        while len(block) > 0:
-            yield block
-            block = file_to_read.read(block_size)
-
-
-def hash_builder(batch_bytes, hasher):
-    for block in batch_bytes:
-        hasher.update(block)
-    return hasher
-
-
-def derive_hash_builder(hex_str=False):
-    def _hex_digest(bytes_batch, hasher):
-        return hash_builder(bytes_batch, hasher).hexdigest()
-
-    def _digest(bytes_batch, hasher):
-        return hash_builder(bytes_batch, hasher).digest()
-
-    return _hex_digest if hex_str else _digest
-
-
-def derive_hash_func(hash_factory, hash_func):
-    def _hash(file_name):
-        return hash_factory(block_iter(open(file_name, 'rb')), hash_func())
-
-    return _hash
-
 
 class File:
     def __init__(self, path, last_modified):
@@ -60,97 +28,10 @@ class File:
         return f"{self.path} modified at {self.last_modified}"
 
 
-def directory_is_empty(path: AnyStr) -> bool:
-    """
-    :param path: a directory path
-    :return: True if directory is empty, False otherwise
-    """
-    return not any(os.scandir(path))
-
-
-def derive_filtered_file_iter(filename_filters: [] = None, path_blacklists: [] = None) -> Callable[[AnyStr], bool]:
-    def _filtered_file_iter(directory_name: AnyStr) -> [AnyStr]:
-        for root, _, files in os.walk(directory_name, topdown=False):
-            if any(in_blacklist(root) for in_blacklist in path_blacklists):  # skip the path from blacklist
-                continue
-            for filename in files:
-                if all(filename_filter(filename) for filename_filter in filename_filters):
-                    yield os.path.join(root, filename)
-
-    return _filtered_file_iter
-
-
-def file_iter(directory_name: AnyStr) -> [AnyStr]:
-    for root, _, files in os.walk(directory_name, topdown=False):
-        for filename in files:
-            yield os.path.join(root, filename)
-
-
-def derive_filtered_empty_directory_iter(path_blacklists: [] = None) -> Callable[[AnyStr], bool]:
-    def _filtered_empty_directory_iter(directory_name: AnyStr) -> [AnyStr]:
-        for root, dirs, _ in os.walk(directory_name, topdown=False):
-            if any(in_blacklist(root) for in_blacklist in path_blacklists):  # skip the path from blacklist
-                continue
-            for subdir in dirs:
-                subdir_path = os.path.join(root, subdir)
-                if directory_is_empty(subdir_path):  # directory is empty
-                    yield subdir_path
-
-    return _filtered_empty_directory_iter
-
-
-def empty_directory_iter(directory_name: AnyStr) -> [AnyStr]:
-    for root, dirs, _ in os.walk(directory_name, topdown=False):
-        for subdir in dirs:
-            subdir_path = os.path.join(root, subdir)
-            if directory_is_empty(subdir_path):  # directory is empty
-                yield subdir_path
-
-
-def extension_filter_builder(extensions: [AnyStr]) -> Callable[[AnyStr], bool]:
-    """
-
-    :param extensions: whitelist of extensions
-    :return: Function that checks if filename is in the whitelist
-    """
-
-    def _extension_filter(filename: AnyStr) -> bool:
-        """
-        :param filename: a file name
-        :return: True if filename is in the extensions
-        """
-        _, extension = os.path.splitext(filename)
-        if extension and extension.lower() in extensions:
-            return True
-        return False
-
-    return _extension_filter
-
-
-def path_blacklist_builder(path_blacklist: [AnyStr]) -> Callable[[AnyStr], bool]:
-    """
-    :param path_blacklist: blacklist substrings of path
-    :return: Function that checks any path in the blacklist
-    """
-
-    def _path_in_blacklist(path: AnyStr) -> bool:
-        """
-
-        :param path: a file path without filename
-        :return: True if path was found in the blacklist
-        """
-        for black_path in path_blacklist:
-            if black_path in path:
-                return True
-        return False
-
-    return _path_in_blacklist
-
-
-def delete_empty_directories(empty_directories, remove=False):
+def delete_empty_directories(empty_directories: [AnyStr], remove: bool = False) -> None:
     counter = 0
     for full_dir_path in empty_directories:
-        if directory_is_empty(full_dir_path):  # directory is empty
+        if directory_is_empty(full_dir_path):
             counter += 1
             if remove:
                 print(f"Removing empty directory: {full_dir_path}")
@@ -161,19 +42,6 @@ def delete_empty_directories(empty_directories, remove=False):
         print(f"Total empty directories removed: {counter}")
     else:
         print(f"Total empty directories found: {counter}")
-
-
-def delete_file(filename, remove=False):
-    if remove:
-        print(f"Removing: {filename}")
-        os.remove(filename)
-    else:
-        print(f"Duplicate: {filename}")
-
-
-def get_last_modification_time(filename):
-    stat = os.stat(filename)
-    return max(stat.st_ctime, stat.st_mtime)
 
 
 def remove_duplicates(files, keep_oldest=True, remove=False):
@@ -269,14 +137,13 @@ if __name__ == "__main__":
         blacklist = process_comma_separated_values(args.path_blacklist)
         path_blacklists.append(path_blacklist_builder(blacklist))
 
-    # Build file iterator given extension filters and blacklists
+    custom_file_iter = file_iter
+    custom_dir_iter = empty_directory_iter
+    # If specified, build file iterator given extension filters and blacklists
     if filename_filters or path_blacklists:
         custom_file_iter = derive_filtered_file_iter(filename_filters, path_blacklists)
         if path_blacklists:
             custom_dir_iter = derive_filtered_empty_directory_iter(path_blacklists)
-    else:
-        custom_file_iter = file_iter
-        custom_dir_iter = empty_directory_iter
 
     remove_duplicates(custom_file_iter(root_dir), keep_oldest=args.oldest, remove=args.remove)
 
