@@ -1,13 +1,29 @@
 import os
+from datetime import datetime
 from typing import AnyStr, Callable, Iterable
 
 
-def delete_file(filename, remove=False):
-    if remove:
-        print(f"Removing: {filename}")
-        os.remove(filename)
+class FileCandidate:
+    def __init__(self, path):
+        self.path = path
+        file_stat = os.stat(path)
+        self.last_modified = get_last_modification_time(file_stat)
+        self.size = file_stat.st_size
+
+    def __repr__(self):
+        return f"{self.path} with the size {self.size} modified at {self.last_modified}"
+
+    def size_path_modified(self) -> str:
+        return f"{self.size}\t{self.path}\t{datetime.fromtimestamp(self.last_modified)}"
+
+
+def duplicate_found(file: FileCandidate, do_delete=False) -> int:
+    if do_delete:
+        print(f"Removing: {file.size_path_modified()}")
+        os.remove(file.path)
     else:
-        print(f"Duplicate: {filename}")
+        print(f"Duplicate: {file.size_path_modified()}")
+    return file.size
 
 
 def directory_is_empty(path: AnyStr) -> bool:
@@ -18,7 +34,8 @@ def directory_is_empty(path: AnyStr) -> bool:
     return not any(os.scandir(path))
 
 
-def derive_filtered_file_iter(filename_filters: [] = None, path_blacklists: [] = None) -> Callable[[AnyStr], Iterable[AnyStr]]:
+def derive_filtered_file_iter(filename_filters: [] = None, path_blacklists: [] = None) -> Callable[
+    [AnyStr], Iterable[AnyStr]]:
     def _filtered_file_iter(directory_name: AnyStr) -> Iterable[AnyStr]:
         for root, _, files in os.walk(directory_name, topdown=False):
             if any(in_blacklist(root) for in_blacklist in path_blacklists):  # skip the path from blacklist
@@ -97,6 +114,13 @@ def path_blacklist_builder(path_blacklist: [AnyStr]) -> Callable[[AnyStr], bool]
     return _path_in_blacklist
 
 
-def get_last_modification_time(filename):
-    stat = os.stat(filename)
-    return max(stat.st_ctime, stat.st_mtime)
+def get_last_modification_time(file_stat):
+    return max(file_stat.st_ctime, file_stat.st_mtime)
+
+
+def sizeof_fmt(num, suffix="B"):
+    for unit in ["", "Ki", "Mi", "Gi", "Ti", "Pi", "Ei", "Zi"]:
+        if abs(num) < 1024.0:
+            return f"{num:3.1f}{unit}{suffix}"
+        num /= 1024.0
+    return f"{num:.1f}Yi{suffix}"

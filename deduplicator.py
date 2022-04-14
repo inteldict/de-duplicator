@@ -3,9 +3,9 @@ import os
 import sys
 from typing import AnyStr, Set
 
-from fileutils import directory_is_empty, get_last_modification_time, delete_file, extension_filter_builder, \
+from fileutils import directory_is_empty, duplicate_found, extension_filter_builder, \
     path_blacklist_builder, derive_filtered_file_iter, derive_filtered_empty_directory_iter, file_iter, \
-    empty_directory_iter
+    empty_directory_iter, FileCandidate, sizeof_fmt
 from hash import derive_hash_func, derive_hash_builder, HASH_FUNC
 
 EPILOG = f'''Example usage:
@@ -19,59 +19,54 @@ $ python3 {sys.argv[0]} -d /tmp/test -f jpg,png -e -o
 '''
 
 
-class File:
-    def __init__(self, path, last_modified):
-        self.path = path
-        self.last_modified = last_modified
-
-    def __repr__(self):
-        return f"{self.path} modified at {self.last_modified}"
-
-
 def delete_empty_directories(empty_directories: [AnyStr], remove: bool = False) -> None:
     counter = 0
+    freed_size = 0
     for full_dir_path in empty_directories:
         if directory_is_empty(full_dir_path):
             counter += 1
+            freed_size += os.path.getsize(full_dir_path)
             if remove:
                 print(f"Removing empty directory: {full_dir_path}")
                 os.removedirs(full_dir_path)
             else:
                 print(f"Empty directory: {full_dir_path}")
     if remove:
-        print(f"Total empty directories removed: {counter}")
+        print(f"Total empty directories removed: {counter}, freed size: {sizeof_fmt(freed_size)}")
     else:
-        print(f"Total empty directories found: {counter}")
+        print(f"Total empty directories found: {counter}, total size: {sizeof_fmt(freed_size)}")
 
 
 def remove_duplicates(files, keep_oldest=True, remove=False):
     hash_func = derive_hash_func(derive_hash_builder(False), HASH_FUNC)
     hash_dict = {}
     counter = 0
+    freed_size = 0
     for file_name in files:
         digest = hash_func(file_name)
+        test_file = FileCandidate(file_name)
         if digest in hash_dict:
             prev_file = hash_dict[digest]
-            mod_time = get_last_modification_time(file_name)
+            last_modified = test_file.last_modified
             counter += 1
             if keep_oldest:
-                if prev_file.last_modified <= mod_time:
-                    delete_file(file_name, remove)
+                if prev_file.last_modified <= last_modified:
+                    freed_size += duplicate_found(test_file, remove)
                 else:
-                    delete_file(prev_file.path, remove)
-                    hash_dict[digest] = File(file_name, mod_time)
+                    freed_size += duplicate_found(prev_file, remove)
+                    hash_dict[digest] = FileCandidate(file_name)
             else:
-                if prev_file.last_modified >= mod_time:
-                    delete_file(file_name, remove)
+                if prev_file.last_modified >= last_modified:
+                    freed_size += duplicate_found(test_file, remove)
                 else:
-                    delete_file(prev_file.path, remove)
-                    hash_dict[digest] = File(file_name, mod_time)
+                    freed_size += duplicate_found(prev_file, remove)
+                    hash_dict[digest] = FileCandidate(file_name)
         else:
-            hash_dict[digest] = File(file_name, get_last_modification_time(file_name))
+            hash_dict[digest] = test_file
     if remove:
-        print(f"Total duplicates removed: {counter}")
+        print(f"Total duplicates removed: {counter}, freed size: {sizeof_fmt(freed_size)}")
     else:
-        print(f"Total duplicates found: {counter}")
+        print(f"Total duplicates found: {counter}, total duplicates size: {sizeof_fmt(freed_size)}")
 
 
 def get_parent_directory(parent_dir: AnyStr) -> AnyStr:
