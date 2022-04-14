@@ -2,8 +2,9 @@ import argparse
 import hashlib
 import os
 import sys
+from typing import AnyStr, Callable, Set
 
-INTRO = f'''Example usage:
+EPILOG = f'''Example usage:
 // The program can use hash function of your choice, see hashlib for details
  
 // Find and print duplicated images [jpg,png] and empty directories 
@@ -34,13 +35,13 @@ def hash_builder(batch_bytes, hasher):
 
 
 def derive_hash_builder(hex_str=False):
-    def _hexdigest(bytes_batch, hasher):
+    def _hex_digest(bytes_batch, hasher):
         return hash_builder(bytes_batch, hasher).hexdigest()
 
     def _digest(bytes_batch, hasher):
         return hash_builder(bytes_batch, hasher).digest()
 
-    return _hexdigest if hex_str else _digest
+    return _hex_digest if hex_str else _digest
 
 
 def derive_hash_func(hash_factory, hash_func):
@@ -59,32 +60,103 @@ class File:
         return f"{self.path} modified at {self.last_modified}"
 
 
-def list_files(directory_name, extensions=None):
-    for root, dirs, files in os.walk(directory_name, topdown=False):
-        for filename in files:
-            if extensions:
-                _, file_extension = os.path.splitext(filename)
-                if file_extension.lower() in extensions:
+def directory_is_empty(path: AnyStr) -> bool:
+    """
+    :param path: a directory path
+    :return: True if directory is empty, False otherwise
+    """
+    return not any(os.scandir(path))
+
+
+def derive_filtered_file_iter(filename_filters: [] = None, path_blacklists: [] = None) -> Callable[[AnyStr], bool]:
+    def _filtered_file_iter(directory_name: AnyStr) -> [AnyStr]:
+        for root, _, files in os.walk(directory_name, topdown=False):
+            if any(in_blacklist(root) for in_blacklist in path_blacklists):  # skip the path from blacklist
+                continue
+            for filename in files:
+                if all(filename_filter(filename) for filename_filter in filename_filters):
                     yield os.path.join(root, filename)
-            else:
-                yield os.path.join(root, filename)
-        # recursively iterate over subdirectories
-        # for dir in dirs:
-        #     yield from list_files(os.path.join(root, subdir), extensions)
+
+    return _filtered_file_iter
 
 
-def delete_empty_directories(directory_name, remove=False):
-    counter = 0
+def file_iter(directory_name: AnyStr) -> [AnyStr]:
+    for root, _, files in os.walk(directory_name, topdown=False):
+        for filename in files:
+            yield os.path.join(root, filename)
+
+
+def derive_filtered_empty_directory_iter(path_blacklists: [] = None) -> Callable[[AnyStr], bool]:
+    def _filtered_empty_directory_iter(directory_name: AnyStr) -> [AnyStr]:
+        for root, dirs, _ in os.walk(directory_name, topdown=False):
+            if any(in_blacklist(root) for in_blacklist in path_blacklists):  # skip the path from blacklist
+                continue
+            for subdir in dirs:
+                subdir_path = os.path.join(root, subdir)
+                if directory_is_empty(subdir_path):  # directory is empty
+                    yield subdir_path
+
+    return _filtered_empty_directory_iter
+
+
+def empty_directory_iter(directory_name: AnyStr) -> [AnyStr]:
     for root, dirs, _ in os.walk(directory_name, topdown=False):
         for subdir in dirs:
             subdir_path = os.path.join(root, subdir)
-            if os.path.isdir(subdir_path) and not os.listdir(subdir_path):  # directory is empty
-                counter += 1
-                if remove:
-                    print(f"Removing empty directory: {subdir_path}")
-                    os.removedirs(subdir_path)
-                else:
-                    print(f"Empty directory found: {subdir_path}")
+            if directory_is_empty(subdir_path):  # directory is empty
+                yield subdir_path
+
+
+def extension_filter_builder(extensions: [AnyStr]) -> Callable[[AnyStr], bool]:
+    """
+
+    :param extensions: whitelist of extensions
+    :return: Function that checks if filename is in the whitelist
+    """
+
+    def _extension_filter(filename: AnyStr) -> bool:
+        """
+        :param filename: a file name
+        :return: True if filename is in the extensions
+        """
+        _, extension = os.path.splitext(filename)
+        if extension and extension.lower() in extensions:
+            return True
+        return False
+
+    return _extension_filter
+
+
+def path_blacklist_builder(path_blacklist: [AnyStr]) -> Callable[[AnyStr], bool]:
+    """
+    :param path_blacklist: blacklist substrings of path
+    :return: Function that checks any path in the blacklist
+    """
+
+    def _path_in_blacklist(path: AnyStr) -> bool:
+        """
+
+        :param path: a file path without filename
+        :return: True if path was found in the blacklist
+        """
+        for black_path in path_blacklist:
+            if black_path in path:
+                return True
+        return False
+
+    return _path_in_blacklist
+
+
+def delete_empty_directories(empty_directories, remove=False):
+    counter = 0
+    for full_dir_path in empty_directories:
+        if directory_is_empty(full_dir_path):  # directory is empty
+            counter += 1
+            if remove:
+                print(f"Removing empty directory: {full_dir_path}")
+                os.removedirs(full_dir_path)
+            else:
+                print(f"Empty directory: {full_dir_path}")
     if remove:
         print(f"Total empty directories removed: {counter}")
     else:
@@ -104,17 +176,17 @@ def get_last_modification_time(filename):
     return max(stat.st_ctime, stat.st_mtime)
 
 
-def remove_duplicates(root_dir, extensions=None, keepOldest=True, remove=False, remove_empty=False):
+def remove_duplicates(files, keep_oldest=True, remove=False):
     hash_func = derive_hash_func(derive_hash_builder(False), HASH_FUNC)
     hash_dict = {}
     counter = 0
-    for file_name in list_files(root_dir, extensions):
+    for file_name in files:
         digest = hash_func(file_name)
         if digest in hash_dict:
             prev_file = hash_dict[digest]
             mod_time = get_last_modification_time(file_name)
             counter += 1
-            if keepOldest:
+            if keep_oldest:
                 if prev_file.last_modified <= mod_time:
                     delete_file(file_name, remove)
                 else:
@@ -132,61 +204,80 @@ def remove_duplicates(root_dir, extensions=None, keepOldest=True, remove=False, 
         print(f"Total duplicates removed: {counter}")
     else:
         print(f"Total duplicates found: {counter}")
-    if remove_empty:
-        delete_empty_directories(root_dir, remove)
+
+
+def get_parent_directory(parent_dir: AnyStr) -> AnyStr:
+    if parent_dir:
+        parent_dir = os.path.abspath(parent_dir)
+        assert os.path.isdir(parent_dir), f"Specified directory: {parent_dir} was not found!"
+    else:
+        parent_dir = os.path.dirname(os.path.realpath(__file__))
+    return parent_dir
+
+
+def process_comma_separated_values(raw_str: AnyStr) -> [AnyStr]:
+    result = []
+    if raw_str:
+        if ',' in raw_str:
+            result.extend((e.strip()) for e in raw_str.split(','))
+        else:
+            result.append(raw_str.strip())
+    return result
+
+
+def build_extensions(raw_extensions: AnyStr) -> Set[AnyStr]:
+    extensions_set = set()
+    if raw_extensions:
+        if ',' in raw_extensions:
+            extensions_set.update(('.' + e.strip()) for e in raw_extensions.split(','))
+        else:
+            extensions_set.add('.' + raw_extensions)
+    return extensions_set
 
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description='Given a directory find duplicate files using a hash sum (md5)',
-                                     epilog=INTRO)
-    parser.add_argument("--directory", "-d", help="Root directory to scan", required=False)
+                                     epilog=EPILOG)
+    parser.add_argument("--directory", "-d",
+                        help="Root directory to scan. If not specified, current directory will be used", required=False)
     parser.add_argument("--file-extensions", "-f", help="comma separated list of file extensions f.e. jpg,png",
+                        required=False)
+    parser.add_argument("--path-blacklist", "-b", help="comma separated blacklist f.e. .number,.git",
                         required=False)
     parser.add_argument("--oldest", "-o", help="keep oldest / newest files", required=False, default=True,
                         action='store_true')
-    parser.add_argument("--no-action", "-n", help="Just list of duplicate files to remove", required=False,
-                        default=True, action='store_false')
+    parser.add_argument("--remove", "-r", help="Use this option to perform changes on the filesystem", required=False,
+                        default=False, action='store_false')
     parser.add_argument("--empty", "-e", help="Remove empty directories", required=False,
                         default=False, action='store_true')
 
     args = parser.parse_args()
-    # try:
-    #     args = parser.parse_args()
-    # except:
-    #     parser.print_help()
-    #     sys.exit(0)
 
-    root_dir = args.directory
-    if root_dir:
-        root_dir = os.path.abspath(root_dir)
-        assert os.path.isdir(root_dir), f"Specified directory: {root_dir} was not found!"
-    else:
-        root_dir = os.path.dirname(os.path.realpath(__file__))
+    # Get starting directory for duplicate analysis
+    root_dir = get_parent_directory(args.directory)
     print(f'Searching for duplicates in: {root_dir}')
 
-    extensions = args.file_extensions
-    if extensions:
-        if ',' in extensions:
-            extensions = set('.' + e for e in extensions.split(','))
-        else:
-            extensions = set(('.' + extensions,))
-        print(f'Filter files with following extensions: {sorted(extensions)}')
-    to_remove = args.no_action
-    remove_duplicates(root_dir, extensions, args.oldest, to_remove, remove_empty=args.empty)
+    filename_filters = []
+    if args.file_extensions:  # Filter filenames by extension
+        file_extensions = build_extensions(args.file_extensions)
+        print(f'Filter files with following extensions: {sorted(file_extensions)}')
+        filename_filters.append(extension_filter_builder(file_extensions))
 
-# if args.input:
-#     if args.input.endswith('.gz'):
-#         input = gzip.open(args.input, 'rb')
-#     else:
-#         input = open(args.input, encoding=ENCODING)
-# else:
-#     input = sys.stdin
-#
-# # if args.output:
-# #     output = open(args.output, mode='w')
-# # else:
-# #     output = sys.stdout
-#
-# sentence_ids = read_nodes(args.nodes)
-# replace_tags(input, args.output, sentence_ids)
+    path_blacklists = []
+    if args.path_blacklist:  # Path blacklist
+        blacklist = process_comma_separated_values(args.path_blacklist)
+        path_blacklists.append(path_blacklist_builder(blacklist))
+
+    # Build file iterator given extension filters and blacklists
+    if filename_filters or path_blacklists:
+        custom_file_iter = derive_filtered_file_iter(filename_filters, path_blacklists)
+        if path_blacklists:
+            custom_dir_iter = derive_filtered_empty_directory_iter(path_blacklists)
+    else:
+        custom_file_iter = file_iter
+        custom_dir_iter = empty_directory_iter
+
+    remove_duplicates(custom_file_iter(root_dir), keep_oldest=args.oldest, remove=args.remove)
+
+    if args.empty:  # Analyze or remove empty directories
+        delete_empty_directories(custom_dir_iter(root_dir), args.remove)
